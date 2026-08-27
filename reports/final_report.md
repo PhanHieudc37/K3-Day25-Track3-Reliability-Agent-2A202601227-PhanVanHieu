@@ -46,11 +46,11 @@ Cache đứng trước provider để giảm latency/chi phí. Mỗi provider c�
 
 | SLI | SLO | Thực tế | Đạt? |
 |---|---:|---:|---|
-| Availability | >= 99% | 99.33% | Có |
-| P95 latency | < 2500 ms | 320.41 ms | Có |
-| Fallback success rate | >= 95% | 96.77% | Có |
-| Cache hit rate | >= 10% | 62.33% | Có |
-| Recovery time | < 5000 ms | 2427.8175830841064 ms | Có |
+| Availability | >= 99% | 99.67% | Có |
+| P95 latency | < 2500 ms | 322.62 ms | Có |
+| Fallback success rate | >= 95% | 98.39% | Có |
+| Cache hit rate | >= 10% | 62.00% | Có |
+| Recovery time | < 5000 ms | 2522.9886770248413 ms | Có |
 
 Tất cả SLO đã đạt trong lần chạy này.
 
@@ -59,17 +59,17 @@ Tất cả SLO đã đạt trong lần chạy này.
 | Metric | Giá trị |
 |---|---:|
 | total_requests | 300 |
-| availability | 0.9933 |
-| error_rate | 0.0067 |
-| latency_p50_ms | 268.22 |
-| latency_p95_ms | 320.41 |
-| latency_p99_ms | 324.29 |
-| fallback_success_rate | 0.9677 |
-| cache_hit_rate | 0.6233 |
+| availability | 0.9967 |
+| error_rate | 0.0033 |
+| latency_p50_ms | 266.91 |
+| latency_p95_ms | 322.62 |
+| latency_p99_ms | 331.02 |
+| fallback_success_rate | 0.9839 |
+| cache_hit_rate | 0.62 |
 | circuit_open_count | 9 |
-| recovery_time_ms | 2427.8175830841064 |
-| estimated_cost | 0.052946 |
-| estimated_cost_saved | 0.187 |
+| recovery_time_ms | 2522.9886770248413 |
+| estimated_cost | 0.05407 |
+| estimated_cost_saved | 0.186 |
 
 ## 5. So sánh cache
 
@@ -77,13 +77,13 @@ Hai lần chạy dùng cùng config, 3 scenario × 100 request và seed 25; lầ
 
 | Metric | Không cache | Có cache | Delta (có - không) |
 |---|---:|---:|---:|
-| latency_p50_ms | 267.11 | 268.22 | +1.1100 ms |
-| latency_p95_ms | 321.23 | 320.41 | -0.8200 ms |
-| estimated_cost | 0.141486 | 0.052946 | -0.0885 |
-| cache_hit_rate | 0.0 | 0.6233 | +0.6233 |
+| latency_p50_ms | 264.87 | 266.91 | +2.0400 ms |
+| latency_p95_ms | 323.05 | 322.62 | -0.4300 ms |
+| estimated_cost | 0.141782 | 0.05407 | -0.0877 |
+| cache_hit_rate | 0.0 | 0.62 | +0.6200 |
 
 Cache hit có latency/cost bằng 0 theo contract gateway nên giảm provider call. Percentile hiện chỉ tính provider call có latency dương; cost và hit rate thể hiện trực tiếp lợi ích cache.
-Chi phí provider giảm 62.58% so với lần chạy không cache.
+Chi phí provider giảm 61.86% so với lần chạy không cache.
 
 ### Bằng chứng false hit thật
 
@@ -113,8 +113,8 @@ Khi trỏ Redis tới endpoint không hoạt động, `build_gateway()` chọn b
 | Scenario | Kỳ vọng | Quan sát từ metrics | Kết quả |
 |---|---|---|---|
 | primary_timeout_100 | Primary lỗi 100%; breaker mở và traffic chuyển sang backup. | availability=1.0, fallback_success_rate=1.0, cache_hit_rate=0.67, circuit_open_count=5 | PASS |
-| primary_flaky_50 | Primary lỗi 50%; hệ thống vẫn phục vụ qua cache/provider dự phòng. | availability=0.98, fallback_success_rate=0.931, cache_hit_rate=0.57, circuit_open_count=4 | PASS |
-| all_healthy | Hai provider lỗi 0%; không static fallback hoặc circuit mở. | availability=1.0, fallback_success_rate=0.0, cache_hit_rate=0.63, circuit_open_count=0 | PASS |
+| primary_flaky_50 | Primary lỗi 50%; hệ thống vẫn phục vụ qua cache/provider dự phòng. | availability=0.99, fallback_success_rate=0.9655, cache_hit_rate=0.58, circuit_open_count=4 | PASS |
+| all_healthy | Hai provider lỗi 0%; không static fallback hoặc circuit mở. | availability=1.0, fallback_success_rate=0.0, cache_hit_rate=0.61, circuit_open_count=0 | PASS |
 
 ## 8. Điểm yếu còn lại và cách sửa
 
