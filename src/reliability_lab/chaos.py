@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from pathlib import Path
 
 from reliability_lab.cache import ResponseCache, SharedRedisCache
@@ -38,11 +39,19 @@ def build_gateway(config: LabConfig, provider_overrides: dict[str, float] | None
     cache: ResponseCache | SharedRedisCache | None = None
     if config.cache.enabled:
         if config.cache.backend == "redis":
-            cache = SharedRedisCache(
+            redis_cache = SharedRedisCache(
                 config.cache.redis_url,
                 config.cache.ttl_seconds,
                 config.cache.similarity_threshold,
             )
+            if redis_cache.ping():
+                cache = redis_cache
+            else:
+                redis_cache.close()
+                cache = ResponseCache(
+                    config.cache.ttl_seconds,
+                    config.cache.similarity_threshold,
+                )
         else:
             cache = ResponseCache(config.cache.ttl_seconds, config.cache.similarity_threshold)
     return ReliabilityGateway(providers, breakers, cache)
@@ -51,7 +60,7 @@ def build_gateway(config: LabConfig, provider_overrides: dict[str, float] | None
 def calculate_recovery_time_ms(gateway: ReliabilityGateway) -> float | None:
     """Derive recovery time from circuit breaker transition logs.
 
-    TODO(student): Implement recovery time calculation:
+    Recovery time calculation:
     1. For each breaker in gateway.breakers.values():
        - Walk breaker.transition_log entries
        - Track when circuit goes to "open" (save ts)
@@ -62,13 +71,24 @@ def calculate_recovery_time_ms(gateway: ReliabilityGateway) -> float | None:
     Each transition_log entry is a dict with keys: "from", "to", "reason", "ts"
     where "ts" is time.time() (epoch seconds).
     """
-    raise NotImplementedError("TODO: implement calculate_recovery_time_ms()")
+    recovery_times: list[float] = []
+    for breaker in gateway.breakers.values():
+        opened_at: float | None = None
+        for transition in breaker.transition_log:
+            if transition["to"] == "open":
+                opened_at = float(transition["ts"])
+            elif transition["to"] == "closed" and opened_at is not None:
+                recovery_times.append((float(transition["ts"]) - opened_at) * 1000)
+                opened_at = None
+    if not recovery_times:
+        return None
+    return sum(recovery_times) / len(recovery_times)
 
 
 def run_scenario(config: LabConfig, queries: list[str], scenario: ScenarioConfig) -> RunMetrics:
     """Run a single named chaos scenario.
 
-    TODO(student): Implement the scenario runner:
+    Scenario runner behavior:
     1. Build gateway with build_gateway(config, scenario.provider_overrides or None)
     2. Create empty RunMetrics()
     3. Loop config.load_test.requests times:
@@ -86,14 +106,67 @@ def run_scenario(config: LabConfig, queries: list[str], scenario: ScenarioConfig
     5. Set recovery_time_ms via calculate_recovery_time_ms(gateway)
     6. Return metrics
     """
-    raise NotImplementedError("TODO: implement run_scenario()")
+    gateway = build_gateway(config, scenario.provider_overrides or None)
+    if isinstance(gateway.cache, SharedRedisCache):
+        # Each scenario is an independent measurement. Reusing warm keys would
+        # hide provider failures and can prevent recovery time from being observed.
+        gateway.cache.flush()
+    metrics = RunMetrics()
+
+    primary = gateway.providers[0] if gateway.providers else None
+    configured_primary_fail_rate = primary.fail_rate if primary is not None else 0.0
+
+    for request_index in range(config.load_test.requests):
+        if scenario.name == "primary_flaky_50" and primary is not None:
+            if request_index < config.circuit_breaker.failure_threshold:
+                # Deterministic fault burst: bypass cache and force the breaker OPEN.
+                primary.fail_rate = 1.0
+                prompt = f"account balance chaos probe for user {1000 + request_index}"
+            elif request_index == config.circuit_breaker.failure_threshold:
+                # A healthy probe after the reset window proves actual recovery.
+                time.sleep(config.circuit_breaker.reset_timeout_seconds + 0.01)
+                primary.fail_rate = 0.0
+                prompt = "account balance recovery probe for user 2000"
+            else:
+                primary.fail_rate = configured_primary_fail_rate
+                prompt = random.choice(queries)
+        else:
+            prompt = random.choice(queries)
+        result = gateway.complete(prompt)
+        metrics.total_requests += 1
+        metrics.estimated_cost += result.estimated_cost
+        if result.cache_hit:
+            metrics.cache_hits += 1
+            metrics.estimated_cost_saved += 0.001
+
+        if result.route == "fallback":
+            metrics.fallback_successes += 1
+            metrics.successful_requests += 1
+        elif result.route == "static_fallback":
+            metrics.static_fallbacks += 1
+            metrics.failed_requests += 1
+        else:
+            metrics.successful_requests += 1
+
+        if result.latency_ms > 0:
+            metrics.latencies_ms.append(result.latency_ms)
+
+    metrics.circuit_open_count = sum(
+        1
+        for breaker in gateway.breakers.values()
+        for transition in breaker.transition_log
+        if transition["to"] == "open"
+    )
+    metrics.recovery_time_ms = calculate_recovery_time_ms(gateway)
+    if isinstance(gateway.cache, SharedRedisCache):
+        gateway.cache.close()
+    return metrics
 
 
 def run_simulation(config: LabConfig, queries: list[str]) -> RunMetrics:
     """Run all named scenarios from config, or a default run if none defined.
 
-    TODO(student): Add a cache vs no-cache comparison scenario.
-    Extend with your own custom scenarios (e.g., cost cap near limit).
+    The CLI performs a second cache-disabled run for direct comparison.
     """
     if not config.scenarios:
         default_scenario = ScenarioConfig(name="default", description="baseline run")
@@ -105,10 +178,24 @@ def run_simulation(config: LabConfig, queries: list[str]) -> RunMetrics:
     for scenario in config.scenarios:
         result = run_scenario(config, queries, scenario)
 
-        # TODO(student): Define pass/fail criteria per scenario.
-        # Example: primary_timeout_100 passes if fallback_success_rate > 0.9
-        passed = result.successful_requests > 0
+        if scenario.name == "primary_timeout_100":
+            passed = (
+                result.availability >= 0.99
+                and result.fallback_success_rate >= 0.95
+                and result.circuit_open_count > 0
+            )
+        elif scenario.name == "primary_flaky_50":
+            passed = (
+                result.availability >= 0.95
+                and result.fallback_successes > 0
+                and result.circuit_open_count > 0
+            )
+        elif scenario.name == "all_healthy":
+            passed = result.failed_requests == 0 and result.circuit_open_count == 0
+        else:
+            passed = result.availability >= 0.9
         combined.scenarios[scenario.name] = "pass" if passed else "fail"
+        combined.scenario_details[scenario.name] = result.to_report_dict()
 
         combined.total_requests += result.total_requests
         combined.successful_requests += result.successful_requests

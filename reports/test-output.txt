@@ -1,0 +1,3 @@
+...................................XXXXXXX                               [100%]
+- generated xml file: C:\AITHUCCHIEN\LABS\LAB25\K3-Day25-Track3-Reliability-Agent-2A202601227-PhanVanHieu\reports\test-results.xml -
+35 passed, 7 xpassed in 3.85s

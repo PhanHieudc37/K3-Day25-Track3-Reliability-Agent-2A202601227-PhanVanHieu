@@ -39,6 +39,7 @@ class ScenarioConfig(BaseModel):
 
 
 class LabConfig(BaseModel):
+    seed: int = 25
     providers: list[ProviderConfig]
     circuit_breaker: CircuitBreakerConfig
     cache: CacheConfig
